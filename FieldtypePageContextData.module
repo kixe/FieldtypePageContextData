@@ -1,0 +1,629 @@
+<?php namespace ProcessWire;
+
+/**
+ * ProcessWire Page Fieldtype with Context Data
+ *
+ * Field that stores one or more references to ProcessWire pages with additional data in field context
+ *
+ * @author Christoph Thelen aka @kixe 2021/06/07
+ * @copyright © 2020 Christoph Thelen
+ * @license Licensed under GNU/GPL v3
+ * @link https://processwire.com/talk/topic/...
+ * @version 1.0.0 ALPHA
+ *
+ * @since 1.0.0 2021/06/07 - init
+ *
+ * made for ProcessWire 3.x, by Ryan Cramer
+ * https://processwire.com
+ * 
+ *
+ */
+
+class FieldtypePageContextData extends FieldtypePage {
+
+	public static function getModuleInfo() {
+		return array(
+			'title' => 'Page Reference Context Data',
+			'version' => 100,
+			'summary' => 'Field that stores one or more references to ProcessWire pages with additional data in field context, editable via page edit modal of the referenced page.',
+			'requires' => ['ProcessWire>=3.0.5, AdminPageFieldEditLinks >=3.1.4'] 
+			);
+	}
+
+	protected static function getDefaultModalTitle() {
+		return __('Edit Page "{title}" [#{id}] with additional values related to Pagefield: "{forfield.name}" of page "{forpage.title}" [#{forpage.id}]');
+	}
+	
+	protected static function getDefaultTabLabel() {
+		return __("Pagefield Context Data");
+	}
+
+	/**
+	 * Init (populate default values)
+	 * 
+	 */
+	public function init() {
+		$url = wire('config')->urls->get($this->className());
+		wire('config')->scripts->add($url . 'FieldtypePageExtended.js');
+
+		// if page is saved from modal
+		$this->addHookBefore('Pages::saveReady', function($e) {
+
+		    $page = $e->arguments[0];
+		    $forPage = (int) wire('input')->post->forpage;
+		    $forField = wire('sanitizer')->fieldName(wire('input')->post->forfield);
+
+		    // quick exit
+	        $for = $this->getPageAndField($forPage, $forField);
+		    if (!$for) return;
+	        list($fp, $ff) = $for;
+			
+			$inputfield = $ff->getInputfield($page)->getInputfield();
+			$multiple = $inputfield instanceof InputfieldSelectMultiple;
+		    // item already selected?
+		    $item = $fp->{"$forField"}->findOne($page->id);
+
+		    // assign runtime context data to page (value) if present
+		    if (wire('input')->post) {
+		    	foreach (wire('input')->post as $key => $val) {
+			    	$prefix = "_{$forPage}_{$forField}";
+			    	// ignore other than context data fields
+			    	if (strpos($key, $prefix) !== 0) continue;
+			    	// language value
+			    	if (strpos($key, '__')) $key = str_replace('__', '', $key);
+			    	// assign to page object for later storage
+			    	$page->$key = $val;
+			    }
+			}
+
+		    // if page context data should be saved via modal the page MUST be selected/ added to the field
+		    if (!$item && !$multiple) $forPage->{"$forField"} = new PageArray();
+		    if (!$item) $fp->{"$forField"}->add($page);
+
+		    // save forpage with context data
+		    $fp->save($forField);
+		});
+
+		$this->addHookAfter('ProcessPageEdit::buildForm', function ($event) {
+	        if (!wire('config')->modal) return;
+
+	        $forPage = (int) wire('input')->get('forpage');
+	        $forField = wire('sanitizer')->fieldName(wire('input')->get('forfield'));
+
+	        // quick exit
+	        $for = $this->getPageAndField($forPage, $forField);
+		    if (!$for) return;
+	        list($fp, $ff) = $for;
+
+	        // call wakeupValue() to assign values
+	        $fp->{"$forField"};
+	        $page = $event->object->getPage();
+
+	        // modal title
+	        $vars = clone $page;
+	        $vars->forpage = $fp;
+	        $vars->forfield = $ff;
+
+			$str = $ff->modalTitle? $ff->modalTitle : self::getDefaultModalTitle();
+			$event->object->browserTitle(wirePopulateStringTags($str, $vars));
+
+	        $form = $event->return;
+
+	        $inputfields = $this->getContextDataInputfields($ff, $page, $fp);
+	        $inputfields->attr('title', $ff->tabLabel? $ff->tabLabel : self::getDefaultTabLabel());
+	        $inputfields->attr('name+id', "PageContextDataInputfields"); // we need both unique ID and Name
+
+	        $pageEditTab = $form->find('id=ProcessPageEditContent')->first();
+	        $form->insertAfter($inputfields, $pageEditTab);
+
+	        // inserting in the right place is not enough to set the tab order
+	        // we need the following hook
+	        $this->addHookAfter('ProcessPageEdit::getTabs', function ($event) use ($ff, $fp) {
+	            $event->return = array_merge(
+	                array_slice($event->return, 0, 1, true),
+	                array('PageContextDataInputfields' => $ff->tabLabel? $ff->tabLabel : self::getDefaultTabLabel()), // should be identical to any weird id/name/title set above
+	                array_slice($event->return, 1, null, true)
+	            );
+	        });
+
+	        // always provide forpage and forfield in form action url
+	        $form->attr('action', $event->object->getEditUrl(array('id' => $page->id, 'forpage' => $forPage, 'forfield' => $forField)));
+
+	        // modify labels in modal, add 'Select'
+	        if($ff->allowUnpub || !$page->hasStatus(Page::statusUnpublished)) {
+	        	$labelSave = $form->submit_save->attr('value');
+	        	$form->submit_save->attr('value', $labelSave . ' + ' . $this->_('Select'));
+	        }
+	    	if($ff->allowUnpub && $page->hasStatus(Page::statusUnpublished)) {
+	    		$labelPublish = $form->submit_publish->attr('value');
+	    		if (!empty($labelPublish) && wire('session')->get('clientWidth') > 900) $form->submit_publish->attr('value', $labelPublish . ' + ' . $this->_('Select'));
+	    	} else if (!$ff->allowUnpub && $page->hasStatus(Page::statusUnpublished)) {
+	    		$this->warning(sprintf($this->_('Unpublished pages cannot be selected in the Pagefield: "%1$s". Values entered in context of this Pagefield under the tab "%2$s" are not saved.'), $forField, self::getDefaultTabLabel()));
+	    	}
+	        $event->return = $form;
+	    });
+
+		/**
+		 * Hook ProcessPageEdit::processSaveRedirect to keep forpage and forfield in case of redirect (e.g. field error)
+		 *
+		 */
+		$this->addHookBefore('ProcessPageEdit::processSaveRedirect', function ($event) {
+			if (!wire('config')->modal) return;
+	        $forPage = (int) wire('input')->get('forpage');
+	        $forField = wire('sanitizer')->fieldName(wire('input')->get('forfield'));
+
+	        // quick exit
+	        $for = $this->getPageAndField($forPage, $forField);
+		    if (!$for) return;
+
+			$redirectUrl = $event->arguments[0];
+			if($redirectUrl) {
+				$c = substr($redirectUrl, 0, 1);
+				$admin = $c === '.' || $c === '?' || strpos($redirectUrl, $this->config->urls->admin) === 0; 
+				if($admin) $redirectUrl .= (strpos($redirectUrl, '?') === false ? '?' : '&') . "forpage=$forPage&forfield=$forField";
+			}
+			if(!$redirectUrl) $redirectUrl = $this->getEditUrl(array('forpage' => $forPage, 'forfield' => $forField)); 
+			$event->arguments('redirectUrl', $redirectUrl);
+		});
+	}
+
+	/**
+	 * Given a raw value (value as stored in DB), return the value as it would appear in a Page object
+	 *
+	 * @param Page $page
+	 * @param Field $field
+	 * @param string|int|array $value
+	 * @return string|int|array|object $value
+	 *
+	 * @example value format with 'data_context' as json string
+	 *  array(1) {
+	 *		[0]=>
+	 *			array(2) {
+	 *				["data"] => string(2) "27",
+	 *				["data_context"] => string(1) {"text":"Hello World"}
+	 *			}
+	 *  }
+	 *
+	 */
+	public function ___wakeupValue(Page $page, Field $field, $value) {
+		if (empty($value)) return $this->getBlankValue($page, $field);
+
+		if (is_array($value) && is_array($value[0])) {
+			$contextValues = array_column($value, 'data_context', 'data');
+			$pageArray = parent::___wakeupValue($page, $field, array_column($value,'data'));
+			foreach ($pageArray as $_page) {
+				if (!empty($contextValues[$_page->id])) {
+					$inputfields = $this->getContextDataInputfields($field, $_page, $page);
+					$values = json_decode($contextValues[$_page->id], true);
+
+					foreach ($inputfields as $inputfield) {
+						$k = $inputfield->contextDataField;
+						$v = !empty($values[$k])? $values[$k] : null;
+	
+						if ($inputfield instanceof InputfieldPage) {
+							$options = [];
+							if ($inputfield->parent_id) $options['parent'] = $inputfield->parent_id;
+							if ($inputfield->template_id) $options['template'] = $inputfield->template_id;
+							if (!is_array($v)) {
+								$options['getOne'] = true;
+							}
+							$v = $this->wire()->pages->getByIDs($v, $options);
+						}
+						if ($inputfield instanceof InputfieldCheckbox) $v = (int) $v;
+
+						// multilanguage support
+						if ($inputfield->useLanguages) {
+							$langValue = [];
+							foreach ($this->wire()->languages as $language) {
+								if (!$language->isDefault()) {
+									$lv = empty($values["$k$language->id"])? '' : $values["$k$language->id"];
+									$_page->{"$inputfield->name$language->id"} = $lv;
+									$langValue["$language->id"] = $lv;
+								}
+								else $langValue["$language->id"] = (string) $v;
+							}
+							$v = new LanguagesPageFieldValue($_page, new Field(), $langValue);
+						} 
+						
+						// assign runtime values
+						$_page->set("_$k", $v); // not save – can be overwritten, if multiple fields of this type are in use and context field names are not unique
+						$_page->set($inputfield->name, $v); // save
+					}		
+				}
+			}
+			return $pageArray;
+		} else throw new WireException('Wrong data format. Unable to assign values.');
+	}
+
+	/**
+	 * Given an 'awake' value, as set by wakeupValue, convert the value back to a basic type for storage in DB. 
+	 *              
+	 * @param Page $page
+	 * @param Field $field
+	 * @param string|int|array|object $value
+	 * @return array
+	 *
+	 */
+	public function ___sleepValue(Page $page, Field $field, $value) {
+		
+		if($field->hasContext($page)) $field = $field->getContext($page);
+		
+		$sleepValue = array();
+		
+		if($field->get('derefAsPage') > 0) {
+			// if the $value isn't specifically a Page, make it a blank array for storage
+			if(!$value instanceof Page || !$value->id) return $sleepValue; 
+			// if $value is a Page (not a NullPage) then place it's ID in an array for storage 
+			$sleepValue[] = ['data' => $value->id,'data_context' => $this->getContextDataString($value, $page->id, $field->name)];
+		} else {
+			// if $value isn't a PageArray then we'll store a blank array
+			if(!$value instanceof PageArray) return $sleepValue; 
+			// iterate through the array and place each Page ID
+			foreach($value as $pg) {
+				if(!$pg->id) continue;
+				$sleepValue[] = ['data' => $pg->id,'data_context' => $this->getContextDataString($pg, $page->id, $field->name)];
+			}
+		}		
+		return $sleepValue;
+	}
+
+	/**
+	 * validate input, get Page and Field instance
+	 * 
+	 * @param numeric $pageID – page where the field lives in
+	 * @param string $fieldname
+	 * @param string $return ('Page', 'Field', 'bool')
+	 * @return bool|array
+	 *
+	 */
+	protected function getPageAndField($pageID = 0, $fieldname = '') {
+		// quick exit
+		if (empty($pageID) && empty($fieldname)) return false;
+		$page = wire('pages')->get($pageID);
+		// $page does not exist
+		if (!$page->id) return false;
+		// $field not part of targetPage
+		if (!$page->hasField($fieldname)) return false;	
+		// fieldtype does not match
+		$field = wire('fields')->get($fieldname);
+		$class = get_class($this);
+		if (!$field->type instanceof $class) return false;
+		return [$page, $field];
+	}
+
+	/**
+	 * get Inputfields for Context Data
+	 * also used as validator
+	 *
+	 * @param object Field
+	 * @param object $page - value
+	 * @param object Page - page where the field lives in
+	 * @return object InputfieldWrapper
+	 * 
+	 */
+	protected function getContextDataInputfields(Field $field, Page $page = null, Page $forPage = null) {
+		if (!empty($_POST['contextDataFields'])) {
+			$field->contextDataFields = $_POST['contextDataFields'];
+		}
+		$class = get_class($this);
+		if (!$field->type instanceof $class) throw new WireException('Expected field of type FieldtypePageContextData.');
+		// if (empty($field->contextDataFields)) throw new WireException('Field settings error. context data fields missing.');
+
+		$errorPrefix = $this->_('Syntax error in field settings (context data fields). ');
+		$inputfields = new InputfieldWrapper();
+		$contextDataField = strtok($field->contextDataFields, "\r\n");
+		$names = [];
+		$line = 0;
+		while ($contextDataField !== false) {
+			$line++;
+			$settings = null;
+			// missing double dot
+			if (!strpos($contextDataField, ':')) {
+				$this->error($errorPrefix . sprintf($this->_('Use double dot as separator between field name and Inputfield. Line %1$s'), $line));
+				$contextDataField = strtok("\r\n");
+				continue;
+			}
+			// split by first occurence of double dot
+			$name = trim(strstr($contextDataField,':', true));
+			if (in_array($name, $names)) {
+				$this->error($errorPrefix . sprintf($this->_('Duplicate field name: "%1$s". Use unique field names. Line %2$s'), $name, $line));
+				$contextDataField = strtok("\r\n");
+				continue;
+			}
+			$names[] = $name;
+		    $type = trim(strstr($contextDataField,':'),' :');
+		    // Inputfieldtype not defined
+		    if (!strlen($type)) {
+		    	$this->error($errorPrefix . sprintf($this->_('Inputfield not defined for "%1$s". Line %2$s'), $name, $line));
+		    	$contextDataField = strtok("\r\n");
+				continue;
+		    }
+			if (strpos($type, ',')) {
+				// replace escaped commata with placeholder
+				if (strpos($type, '\,')) $type = str_replace('\,', '¿?', $type);
+				$settings = array_filter(explode(',', trim(strstr($type,','),' ,')));
+				$type = trim(strstr($type,',',true));
+			}
+			$inputfield = wire()->modules->get($type);
+			// Inputfieldtype does not exist
+			if (!$inputfield) {
+				$this->error($errorPrefix . sprintf($this->_('Inputfield class: "%1$s" does not exist. Line %2$s'), $type, $line));
+				$contextDataField = strtok("\r\n");
+				continue;
+
+			}
+			// Inputfieldtype not supported
+			if ($inputfield instanceof InputfieldFile) {
+				$this->error($errorPrefix . sprintf($this->_('Inputfield class: "%1$s" is not supported. Line %2$s'), $type, $line));
+				$contextDataField = strtok("\r\n");
+				continue;
+
+			}
+
+			$inputfield->label = $name; // default to prevent ugly Inputfield names e.g. _1234_contextfield_name
+
+			// apply settings
+			if ($settings) {
+        		foreach ($settings as $setting) {
+        			// split by first occurence of equal sign
+        			$settingName = trim(strstr($setting,'=', true));
+	        		$settingValue = trim(strstr($setting,'='),' =');
+	        		// replace comma placeholders with comma
+	        		if (strpos($settingValue, '¿?')) $settingValue = str_replace('¿?', ',', $settingValue);
+	        		if ($inputfield instanceof InputfieldSelect && $settingName == 'options') {
+						$inputfield->addOptionsString(str_replace('\n', "\n", $settingValue));
+	        		} else if ($this->wire('languages') && wire('user')->language->isDefault() == false && strpos($settingName,'label') === 0 && strlen($settingName) > 5) {
+	        			$langID = (int) substr($settingName, 5);
+	        			if ($langID) {
+	        				$language = wire('languages')->get($langID);
+	        				if (!$language->id) continue;
+	        				if (wire('user')->language != $language) continue;
+	        				unset($settings['label']);
+	        				$inputfield->label = $settingValue;
+	        				continue;
+	        			}
+	        		}
+	        		$inputfield->{trim($settingName)} = trim($settingValue);
+	        	}
+
+	        }
+
+			// check support of Page Inputfields
+			if ($inputfield instanceof InputfieldPage) {
+				if (in_array($inputfield->inputfield, ['InputfieldTextTags','InputfieldPageAutocomplete'])) { 
+					$this->error($errorPrefix . sprintf($this->_('Inputfield: "%1$s" not supported as Input for InputfieldPage "%2$s". Line %3$s'), $inputfield->inputfield, $name, $line));
+					$contextDataField = strtok("\r\n");
+					continue;
+				}
+				if (!$inputfield->labelFieldName) $inputfield->set('labelFieldName', 'title|name');
+			}
+
+			/*
+			// check naming of multilanguage inputfields
+			if ($inputfield->useLanguages && is_numeric(substr($name, -1))) {
+				$this->error($errorPrefix . sprintf($this->_('The name of a multilanguage field must not end with a number. Line %s'), $line));
+				$contextDataField = strtok("\r\n");
+				continue;
+			}
+			*/
+
+			// assign context data field name used by getMatchQuery()
+			$inputfield->contextDataField = strtolower(trim($name)); 
+
+			// assign values if present
+			if ($page && $forPage) {
+	        	$inputfield->attr('name+id', "_{$forPage->id}_{$field->name}_" . strtolower(trim($name)));
+	        	$value = $page->{"_{$forPage->id}_{$field->name}_" . strtolower(trim($name))};
+	        	if ($inputfield instanceof InputfieldCheckbox) {
+	        		$inputfield->attr('checked', $value ? 'checked' : '');
+	        	}
+
+		        $inputfield->attr('value', $value);
+        	
+	        	if($this->wire('languages') && $inputfield->useLanguages) {
+					foreach($this->wire('languages') as $language) {
+						$key = $language->isDefault()? strtolower(trim($name)) : strtolower(trim($name)) . $language->id;
+						if ($value instanceof LanguagesPageFieldValue) {
+							$langValue = $value->getLanguageValue($language->id);
+						} else {
+							$langValue = $page->{"_{$forPage->id}_{$field->name}_$key"};
+						}
+						if(empty($langValue)) continue;
+						$inputfield->set('value' . $language->id, $langValue);
+					}
+				}
+	        }
+	        $inputfields->add($inputfield);
+			$contextDataField = strtok("\r\n");
+		}
+
+		// add hidden fields for page edit
+		if ($page && $forPage) {
+			$inputfield = wire()->modules->get('InputfieldHidden');
+	        $inputfield->attr('name+id', 'forfield');
+	        $inputfield->attr('value', $field->name);
+	        $inputfields->add($inputfield);
+
+	        $inputfield = wire()->modules->get('InputfieldHidden');
+	        $inputfield->attr('name+id', 'forpage');
+	        $inputfield->attr('value', $forPage->id);
+	        $inputfields->add($inputfield);
+	    }
+
+		return $inputfields;
+	}
+
+	/**
+	 * get json encoded string of data array for storage
+	 * 
+	 * @param Page $page
+	 * @param numeric $forpage (page ID)
+	 * @param string $forfield (field name)
+	 * @return string
+	 * @throws WireException
+	 * 
+	 */
+	protected function getContextDataString($page, $forpage, $forfield) {
+		$for = $this->getPageAndField($forpage, $forfield);
+		if (!$for) throw new WireException('Function getContextDataString() failed. Unable to determine page and field.');
+	    list($fp, $ff) = $for;
+	    $data = [];
+
+	    $contextDataField = strtok($ff->contextDataFields, "\r\n");
+		while ($contextDataField !== false) {
+			$name = strtolower(trim(strstr($contextDataField,':',true)));
+			$type = trim(strstr($contextDataField,':'),' :');
+			if (strpos($type, ',')) {
+				$langField = strpos($type, 'useLanguages=1') !== false; 
+				$type = trim(strstr($type,',',true));
+			}
+	        $value = $page->{"_{$forpage}_{$forfield}_$name"};
+	        if ($type == 'InputfieldPage' && ($value instanceof Page || $value instanceof PageArray)) {
+	        	if ($value instanceof PageArray) {
+	        		$value = $value->each('id');
+	        	} else $value = $value->id;
+	        }
+	        $contextDataField = strtok("\r\n");
+	        if (empty($value)) continue;
+
+	        if ($langField && $this->wire('languages')) {	
+				foreach($this->wire('languages') as $language) {
+					$key = $language->isDefault()? strtolower(trim($name)) : strtolower(trim($name)) . $language->id;
+					if ($value instanceof LanguagesPageFieldValue) {
+						$langValue = $value->getLanguageValue($language->id);
+					} else {
+						$langValue = $page->{"_{$forpage}_{$forfield}_$key"};
+					}
+					if(empty($langValue)) continue;
+					$data[$key] = $langValue;
+				}
+			} else $data[$name] = $value;
+		}
+		if (empty($data)) return null;
+		return json_encode($data, JSON_NUMERIC_CHECK);
+	}
+
+	/**
+	 * Get Inputfields to configure extra field
+	 * 
+	 * @param Field $field
+	 * @return InputfieldWrapper
+	 * 
+	 */
+	public function ___getConfigInputfields(Field $field) {
+		$this->getContextDataInputfields($field); // any configuration errors?
+		$inputfields = parent::___getConfigInputfields($field);
+		$lang = '';
+
+		// tab label 2nd config inputfield
+		$f = wire('modules')->get('InputfieldText');
+		$f->attr('name+id', 'tabLabel');
+		$f->label = $this->_('Tab Label');
+		$f->description = $this->_('');
+		$f->placeholder = self::getDefaultTabLabel();
+		$f->notes = $this->_('');
+		// if ($tabLabel) $f->notes = "**" . $this->_('Default') . ":** " . self::getDefaultTabLabel();
+		$f->columdWidth = 50;
+		$tabLabel = $field->tabLabel? $field->tabLabel : $this->_('Pagefield Context Data');
+		$f->attr('value', $tabLabel);
+		if($this->wire('languages')) {
+			$f->useLanguages = 1;
+			foreach($this->wire('languages') as $language) {
+				if ($language->isDefault()) continue;
+				else $lang = $language->id;
+				$field->{"tabLabel$lang"}? $field->{"tabLabel$lang"} : $tabLabel;
+				$f->attr("value$lang", $field->{"tabLabel$lang"});
+				if (wire('user')->language == $language) $tabLabel = $f->attr("value$lang");
+			}
+		}
+		$inputfields->add($f);
+
+		// context data field setup 1st config inputfield
+		$f = wire('modules')->get('InputfieldTextarea');
+		$f->attr('name+id', 'contextDataFields');
+		$f->label = $this->_('Additional page fields in Pagefield context');
+		$f->description = sprintf($this->_('Enter one field per line in the format `name:Inputfield`. The Inputfield must be defined by classname e.g. **InputfieldTextarea**. After specifying the inputfield, further inputfield settings can be added separated by commata, e.g. `text:InputfieldText,columnWidth=50,label=Hello World`. Commata is reserved as separator. If you need to use commata in a setting value escape via backslash "\,". Please see [instructions for using this field](%s).'), 'https://processwire.com/');
+		$f->notes = sprintf($this->_('Inputfields defined here only appear in the page edit modal under the tab "%s" that was opened from the Pagefield.'), $tabLabel);
+		$f->attr('value', $field->contextDataFields);
+		$f->attr('rows', 10);
+		$f->required = true;
+		$inputfields->insertBefore($f, $inputfields->get('tabLabel'));
+
+		// modal title
+		$f = wire('modules')->get('InputfieldText');
+		$f->attr('name+id', 'modalTitle');
+		$f->label = $this->_('Modal Title');
+		$f->description = $this->_("Title of the modal within the page is edited. Use placeholders surrounded by curled brackets to provide page fields and properties. Field and page beeing edited from where this modal has been opened are accessible via the properties: 'forpage' and 'forfield'.");
+		$f->notes = "**" . $this->_('Default') . ":** " . self::getDefaultModalTitle();
+
+		$f->columdWidth = 50;
+		if($this->wire('languages')) {
+			$f->useLanguages = 1;
+			foreach($this->wire('languages') as $language) {
+				if ($language->isDefault()) $lang = '';
+				else $lang = $language->id;
+				$f->attr("value$lang", $field->{"modalTitle$lang"});
+			}
+		}
+		$inputfields->add($f);
+
+
+		return $inputfields; 
+	}
+
+	/**
+	 * Update a DatabaseSelectQuery object to match a Page associated with a matching context data field
+	 * This function is limited to the usage with the equalsign operator in selectors
+	 * and fields that do not support array values or multilanguage values
+	 * use selector '<fieldname><languageID>=<searchstring>' to search for a specific language
+	 * 
+	 *
+	 * @param DatabaseQuerySelect|PageFinderDatabaseQuerySelect $query
+	 * @param string $table
+	 * @param string $subfield
+	 * @param string $operator
+	 * @param string $value
+	 * @return DatabaseQuery
+	 * @throws WireException if operator not supported or Inputfield has array value
+	 *
+	 */
+	public function getMatchQuery($query, $table, $subfield, $operator, $value) {
+		$fieldSubfield = $this->getContextDataInputfields($query->field)->child("contextDataField=$subfield");
+
+		// remove leading underscore if present
+		$subfield = ltrim($subfield, '_');
+		
+		// quick exit
+		if (!$fieldSubfield) return parent::getMatchQuery($query, $table, $subfield, $operator, $value);
+		else if ($operator != '=') throw new WireException("Operator '$operator' is not allowed for context data fields");
+		if($fieldSubfield instanceof InputfieldHasArrayValue || $fieldSubfield instanceof InputfieldSupportsArrayValue ||wire('modules')->get($fieldSubfield->inputfield) instanceof InputfieldHasArrayValue || wire('modules')->get($fieldSubfield->inputfield) instanceof InputfieldSupportsArrayValue) {
+			throw new WireException("Context data fields supporting array values are not matchable via selector.");
+		}
+
+		// translate selector
+		$value = trim(json_encode([$subfield => $value]), '{}');
+		$subfield = 'data_context';
+		$operator = '%=';
+
+		$ft = new DatabaseQuerySelectFulltext($query); 
+		$ft->match($table, $subfield, $operator, $value); 
+		return $query;
+	}
+
+	/**
+	 * Return the database schema in predefined format 
+	 * 
+	 * @param Field $field
+	 * @return array
+	 *
+	 */
+	public function getDatabaseSchema(Field $field) {
+		$schema = parent::getDatabaseSchema($field);
+		$schema['data'] = 'int NOT NULL';
+		$schema['data_context'] = "mediumtext NOT NULL";
+		$schema['keys']['data'] = 'KEY data (data, pages_id, sort)';
+		$schema['keys']['data_context'] = 'FULLTEXT KEY `data_context` (`data_context`)'; 
+		return $schema;
+	}
+}
+
