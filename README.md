@@ -116,7 +116,7 @@ foreach ($page->fieldname as $reference) {
 Multilanguage Fields are supported. Set setting: **useLanguages=1**  
 
 ## Limitations
-+ The usage of  `get()` or `find()` with context data values is very limited:\
++ The usage of  `get()` or `find()` with context data values is very limited:
 	+ no support for multilanguage fields
 	+ only equal sign operator allowed
 	+ no support for array values
