@@ -44,7 +44,7 @@ class FieldtypePageContextData extends FieldtypePage {
 	 */
 	public function init() {
 		$url = wire('config')->urls->get($this->className());
-		wire('config')->scripts->add($url . 'FieldtypePageExtended.js');
+		wire('config')->scripts->add($url . 'FieldtypePageContextData.js');
 
 		// if page is saved from modal
 		$this->addHookBefore('Pages::saveReady', function($e) {
