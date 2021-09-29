@@ -9,10 +9,10 @@
  * @copyright © 2020 Christoph Thelen
  * @license Licensed under GNU/GPL v3
  * @link https://processwire.com/talk/topic/...
- * @version 1.0.0 ALPHA
+ * @version 1.0.2 ALPHA
  *
  * @since 1.0.0 2021/06/07 - init
- * @since 1.0.1 2021/09/28 - fixed bug separator for options not compatible with windows
+ * @since 1.0.2 2021/09/28 - fixed bug separator for options not compatible with windows
  *
  * made for ProcessWire 3.x, by Ryan Cramer
  * https://processwire.com
@@ -25,7 +25,7 @@ class FieldtypePageContextData extends FieldtypePage {
 	public static function getModuleInfo() {
 		return array(
 			'title' => 'Page Reference Context Data',
-			'version' => 101,
+			'version' => 102,
 			'summary' => 'Field that stores one or more references to ProcessWire pages with additional data in field context, editable via page edit modal of the referenced page.',
 			'requires' => ['ProcessWire>=3.0.5, AdminPageFieldEditLinks >=3.1.4'] 
 			);
@@ -372,7 +372,8 @@ class FieldtypePageContextData extends FieldtypePage {
 	        		// replace comma placeholders with comma
 	        		if (strpos($settingValue, '¿?')) $settingValue = str_replace('¿?', ',', $settingValue);
 	        		if ($inputfield instanceof InputfieldSelect && $settingName == 'options') {
-						$inputfield->addOptionsString(str_replace('\n', "\r\n", $settingValue));
+						$inputfield->addOptionsString(str_replace('\n', PHP_EOL, $settingValue));
+						continue;
 	        		} else if ($this->wire('languages') && wire('user')->language->isDefault() == false && strpos($settingName,'label') === 0 && strlen($settingName) > 5) {
 	        			$langID = (int) substr($settingName, 5);
 	        			if ($langID) {
