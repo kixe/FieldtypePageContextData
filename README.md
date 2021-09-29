@@ -73,7 +73,7 @@ Use 'options' as setting name separate each option value or value=label pair usi
 #### Setting Examples:
 
 ```
-text:InputfieldText,columnWidth=50,description=This is a nice description including a comma\, escaped with backslash and equal sign == and double dot : xyz,label=Nice Label fo Text Inputfield,notes=whats up?
+text:InputfieldText,columnWidth=50,description=This is a nice description including a comma\, escaped with backslash and equal sign == and colon : xyz,label=Nice Label fo Text Inputfield,notes=whats up?
 integer:InputfieldInteger,columnWidth=50,inputType=number
 area:InputfieldTextarea,rows=12
 page:InputfieldPageListSelect,parent_id=1,inputfield=InputfieldAsmSelect

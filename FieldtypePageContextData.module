@@ -318,13 +318,13 @@ class FieldtypePageContextData extends FieldtypePage {
 		while ($contextDataField !== false) {
 			$line++;
 			$settings = null;
-			// missing double dot
+			// missing colon
 			if (!strpos($contextDataField, ':')) {
-				$this->error($errorPrefix . sprintf($this->_('Use double dot as separator between field name and Inputfield. Line %1$s'), $line));
+				$this->error($errorPrefix . sprintf($this->_('Use colon as separator between field name and Inputfield. Line %1$s'), $line));
 				$contextDataField = strtok("\r\n");
 				continue;
 			}
-			// split by first occurence of double dot
+			// split by first occurence of colon
 			$name = trim(strstr($contextDataField,':', true));
 			if (in_array($name, $names)) {
 				$this->error($errorPrefix . sprintf($this->_('Duplicate field name: "%1$s". Use unique field names. Line %2$s'), $name, $line));
