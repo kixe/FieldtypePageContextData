@@ -121,7 +121,7 @@ Multilanguage Fields are supported. Set setting: **useLanguages=1**
 	+ only equal sign operator allowed
 	+ no support for array values
 + Values are lost after removing related page from the page field.
-+ some Inputfield classes are not unsupported.
++ some Inputfield classes are not supported.
 
 ## Thanks
 to **@thetuningspoon** (Mike Spooner)
