@@ -9,10 +9,13 @@
  * @copyright © 2020 Christoph Thelen
  * @license Licensed under GNU/GPL v3
  * @link https://processwire.com/talk/topic/...
- * @version 1.0.2 ALPHA
+ * @version 1.0.5 BETA
  *
  * @since 1.0.0 2021/06/07 - init
- * @since 1.0.2 2021/09/28 - fixed bug separator for options not compatible with windows
+ * @since 1.0.2 2021/09/28 - fixed bug: separator for options not compatible with windows
+ * @since 1.0.3 2022/09/16 - fixed bug: database scheme column data_context should allow NULL values, default modal title include fallback to name if title is not set
+ * @since 1.0.4 2022/09/16 - fixed bug: make language specific labels idependent from order in setup
+ * @since 1.0.5 2023/03/21 - fixed bug: assign user language for tab label and modal title
  *
  * made for ProcessWire 3.x, by Ryan Cramer
  * https://processwire.com
@@ -25,17 +28,17 @@ class FieldtypePageContextData extends FieldtypePage {
 	public static function getModuleInfo() {
 		return array(
 			'title' => 'Page Reference Context Data',
-			'version' => 102,
+			'version' => 105,
 			'summary' => 'Field that stores one or more references to ProcessWire pages with additional data in field context, editable via page edit modal of the referenced page.',
 			'requires' => ['ProcessWire>=3.0.5, AdminPageFieldEditLinks >=3.1.4'] 
 			);
 	}
 
 	protected static function getDefaultModalTitle() {
-		return __('Edit Page "{title}" [#{id}] with additional values related to Pagefield: "{forfield.name}" of page "{forpage.title}" [#{forpage.id}]');
+		return __('Edit Page "{title|name}" [#{id}] with additional values related to Pagefield: "{forfield.name}" of page "{forpage.title|forpage.name}" [#{forpage.id}]');
 	}
 	
-	protected static function getDefaultTabLabel() {
+	protected static function getDefaultContextTabLabel() {
 		return __("Pagefield Context Data");
 	}
 
@@ -100,18 +103,29 @@ class FieldtypePageContextData extends FieldtypePage {
 	        $fp->{"$forField"};
 	        $page = $event->object->getPage();
 
+	        // get language
+	        $langID = '';
+	       	if (wire('languages')) {
+	        	if (!wire('user')->language->isDefault()) $langID = (string) wire('user')->language;
+	        }
+
 	        // modal title
+	        if ($ff->{"modalTitle$langID"}) $mt = $ff->{"modalTitle$langID"};
+	        else if ($ff->modalTitle) $mt = $ff->modalTitle;
+	        else $mt = self::getDefaultModalTitle();
 	        $vars = clone $page;
 	        $vars->forpage = $fp;
 	        $vars->forfield = $ff;
-
-			$str = $ff->modalTitle? $ff->modalTitle : self::getDefaultModalTitle();
-			$event->object->browserTitle(wirePopulateStringTags($str, $vars));
+			$event->object->browserTitle(wirePopulateStringTags($mt, $vars));
 
 	        $form = $event->return;
 
+	        // context tab label
 	        $inputfields = $this->getContextDataInputfields($ff, $page, $fp);
-	        $inputfields->attr('title', $ff->tabLabel? $ff->tabLabel : self::getDefaultTabLabel());
+	        if ($ff->{"contextTabLabel$langID"}) $cl = $ff->{"contextTabLabel$langID"};
+	        else if ($ff->contextTabLabel) $cl = $ff->contextTabLabel;
+	        else $cl = self::getDefaultContextTabLabel();
+	        $inputfields->attr('title', $cl);
 	        $inputfields->attr('name+id', "PageContextDataInputfields"); // we need both unique ID and Name
 
 	        $pageEditTab = $form->find('id=ProcessPageEditContent')->first();
@@ -119,10 +133,10 @@ class FieldtypePageContextData extends FieldtypePage {
 
 	        // inserting in the right place is not enough to set the tab order
 	        // we need the following hook
-	        $this->addHookAfter('ProcessPageEdit::getTabs', function ($event) use ($ff, $fp) {
+	        $this->addHookAfter('ProcessPageEdit::getTabs', function ($event) use ($ff, $fp, $cl) {
 	            $event->return = array_merge(
 	                array_slice($event->return, 0, 1, true),
-	                array('PageContextDataInputfields' => $ff->tabLabel? $ff->tabLabel : self::getDefaultTabLabel()), // should be identical to any weird id/name/title set above
+	                array('PageContextDataInputfields' => $cl), // should be identical to any weird id/name/title set above
 	                array_slice($event->return, 1, null, true)
 	            );
 	        });
@@ -139,7 +153,7 @@ class FieldtypePageContextData extends FieldtypePage {
 	    		$labelPublish = $form->submit_publish->attr('value');
 	    		if (!empty($labelPublish) && wire('session')->get('clientWidth') > 900) $form->submit_publish->attr('value', $labelPublish . ' + ' . $this->_('Select'));
 	    	} else if (!$ff->allowUnpub && $page->hasStatus(Page::statusUnpublished)) {
-	    		$this->warning(sprintf($this->_('Unpublished pages cannot be selected in the Pagefield: "%1$s". Values entered in context of this Pagefield under the tab "%2$s" are not saved.'), $forField, self::getDefaultTabLabel()));
+	    		$this->warning(sprintf($this->_('Unpublished pages cannot be selected in the Pagefield: "%1$s". Values entered in context of this Pagefield under the tab "%2$s" are not saved.'), $forField, self::getDefaultContextTabLabel()));
 	    	}
 	        $event->return = $form;
 	    });
@@ -361,10 +375,9 @@ class FieldtypePageContextData extends FieldtypePage {
 
 			}
 
-			$inputfield->label = $name; // default to prevent ugly Inputfield names e.g. _1234_contextfield_name
-
 			// apply settings
 			if ($settings) {
+				// $languageLabel = null;
         		foreach ($settings as $setting) {
         			// split by first occurence of equal sign
         			$settingName = trim(strstr($setting,'=', true));
@@ -374,21 +387,34 @@ class FieldtypePageContextData extends FieldtypePage {
 	        		if ($inputfield instanceof InputfieldSelect && $settingName == 'options') {
 						$inputfield->addOptionsString(str_replace('\n', PHP_EOL, $settingValue));
 						continue;
-	        		} else if ($this->wire('languages') && wire('user')->language->isDefault() == false && strpos($settingName,'label') === 0 && strlen($settingName) > 5) {
-	        			$langID = (int) substr($settingName, 5);
+	        		} else if ($this->wire('languages') && wire('user')->language->isDefault() == false) {
+	        			// assign label, description, notes in user language if set
+						$langID = 0;
+	        			if (strpos($settingName,'label') === 0 && strlen($settingName) > 5) {
+	        				$settingName = 'label';
+	        				$langID = (int) substr($settingName, 5);
+	        			} else if (strpos($settingName,'description') === 0 && strlen($settingName) > 11) {
+	        				$langID = (int) substr($settingName, 11);
+	        				$settingName = 'description';
+	        			} else if (strpos($settingName,'notes') === 0 && strlen($settingName) > 5) {
+	        				$langID = (int) substr($settingName, 5);
+	        				$settingName = 'notes';
+	        			}
 	        			if ($langID) {
 	        				$language = wire('languages')->get($langID);
 	        				if (!$language->id) continue;
 	        				if (wire('user')->language != $language) continue;
-	        				unset($settings['label']);
-	        				$inputfield->label = $settingValue;
+	        				$inputfield->$settingName = trim($settingValue);
 	        				continue;
 	        			}
 	        		}
-	        		$inputfield->{trim($settingName)} = trim($settingValue);
+	        		if (in_array($settingName, ['label','description','notes']) && $inputfield->$settingName) continue;
+	        		$inputfield->$settingName = trim($settingValue);
 	        	}
-
 	        }
+
+	        // default to prevent ugly Inputfield names e.g. _1234_contextfield_name
+	        if (empty($inputfield->label)) $inputfield->label = $name;
 
 			// check support of Page Inputfields
 			if ($inputfield instanceof InputfieldPage) {
@@ -502,7 +528,8 @@ class FieldtypePageContextData extends FieldtypePage {
 			} else $data[$name] = $value;
 		}
 		if (empty($data)) return null;
-		return json_encode($data, JSON_NUMERIC_CHECK);
+		// return json_encode($data, JSON_NUMERIC_CHECK);
+		return json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_NUMERIC_CHECK);
 	}
 
 	/**
@@ -519,23 +546,22 @@ class FieldtypePageContextData extends FieldtypePage {
 
 		// tab label 2nd config inputfield
 		$f = wire('modules')->get('InputfieldText');
-		$f->attr('name+id', 'tabLabel');
+		$f->attr('name+id', 'contextTabLabel');
 		$f->label = $this->_('Tab Label');
 		$f->description = $this->_('');
-		$f->placeholder = self::getDefaultTabLabel();
+		$f->placeholder = self::getDefaultContextTabLabel();
 		$f->notes = $this->_('');
-		// if ($tabLabel) $f->notes = "**" . $this->_('Default') . ":** " . self::getDefaultTabLabel();
-		$f->columdWidth = 50;
-		$tabLabel = $field->tabLabel? $field->tabLabel : $this->_('Pagefield Context Data');
-		$f->attr('value', $tabLabel);
+		$f->columnWidth = 33;
+		$contextTabLabelValue = $field->contextTabLabel? $field->contextTabLabel : self::getDefaultContextTabLabel();
+		$f->attr('value', $contextTabLabelValue);
 		if($this->wire('languages')) {
 			$f->useLanguages = 1;
 			foreach($this->wire('languages') as $language) {
 				if ($language->isDefault()) continue;
-				else $lang = $language->id;
-				$field->{"tabLabel$lang"}? $field->{"tabLabel$lang"} : $tabLabel;
-				$f->attr("value$lang", $field->{"tabLabel$lang"});
-				if (wire('user')->language == $language) $tabLabel = $f->attr("value$lang");
+				$f->attr("value$language", $field->{"contextTabLabel$language"});
+				if (wire('user')->language == $language && $field->{"contextTabLabel$language"}) {
+					$contextTabLabelValue = $field->{"contextTabLabel$language"};
+				}
 			}
 		}
 		$inputfields->add($f);
@@ -545,11 +571,11 @@ class FieldtypePageContextData extends FieldtypePage {
 		$f->attr('name+id', 'contextDataFields');
 		$f->label = $this->_('Additional page fields in Pagefield context');
 		$f->description = sprintf($this->_('Enter one field per line in the format `name:Inputfield`. The Inputfield must be defined by classname e.g. **InputfieldTextarea**. After specifying the inputfield, further inputfield settings can be added separated by commata, e.g. `text:InputfieldText,columnWidth=50,label=Hello World`. Commata is reserved as separator. If you need to use commata in a setting value escape via backslash "\,". Please see [instructions for using this field](%s).'), 'https://processwire.com/');
-		$f->notes = sprintf($this->_('Inputfields defined here only appear in the page edit modal under the tab "%s" that was opened from the Pagefield.'), $tabLabel);
+		$f->notes = sprintf($this->_('Inputfields defined here only appear in the page edit modal under the tab "%s" that was opened from the Pagefield.'), $contextTabLabelValue);
 		$f->attr('value', $field->contextDataFields);
 		$f->attr('rows', 10);
 		$f->required = true;
-		$inputfields->insertBefore($f, $inputfields->get('tabLabel'));
+		$inputfields->insertBefore($f, $inputfields->get('contextTabLabel'));
 
 		// modal title
 		$f = wire('modules')->get('InputfieldText');
@@ -557,18 +583,16 @@ class FieldtypePageContextData extends FieldtypePage {
 		$f->label = $this->_('Modal Title');
 		$f->description = $this->_("Title of the modal within the page is edited. Use placeholders surrounded by curled brackets to provide page fields and properties. Field and page beeing edited from where this modal has been opened are accessible via the properties: 'forpage' and 'forfield'.");
 		$f->notes = "**" . $this->_('Default') . ":** " . self::getDefaultModalTitle();
-
-		$f->columdWidth = 50;
+		$f->columnWidth = 67;
+		$f->attr('value', $field->modalTitle? $field->modalTitle : self::getDefaultModalTitle());
 		if($this->wire('languages')) {
 			$f->useLanguages = 1;
 			foreach($this->wire('languages') as $language) {
-				if ($language->isDefault()) $lang = '';
-				else $lang = $language->id;
-				$f->attr("value$lang", $field->{"modalTitle$lang"});
+				if ($language->isDefault()) continue;
+				$f->attr("value$language", $field->{"modalTitle$language"});
 			}
 		}
 		$inputfields->add($f);
-
 
 		return $inputfields; 
 	}
@@ -622,9 +646,9 @@ class FieldtypePageContextData extends FieldtypePage {
 	public function getDatabaseSchema(Field $field) {
 		$schema = parent::getDatabaseSchema($field);
 		$schema['data'] = 'int NOT NULL';
-		$schema['data_context'] = "mediumtext NOT NULL";
+		$schema['data_context'] = "mediumtext NULL";
 		$schema['keys']['data'] = 'KEY data (data, pages_id, sort)';
-		$schema['keys']['data_context'] = 'FULLTEXT KEY `data_context` (`data_context`)'; 
+		$schema['keys']['data_context'] = 'FULLTEXT KEY `data_context` (`data_context`)';
 		return $schema;
 	}
 }
