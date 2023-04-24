@@ -9,7 +9,7 @@
  * @copyright © 2020 Christoph Thelen
  * @license Licensed under GNU/GPL v3
  * @link https://processwire.com/talk/topic/...
- * @version 1.0.5 BETA
+ * @version 1.0.6 BETA
  *
  * @since 1.0.0 2021/06/07 - init
  * @since 1.0.2 2021/09/28 - fixed bug: separator for options not compatible with windows
