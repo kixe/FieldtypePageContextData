@@ -16,6 +16,7 @@
  * @since 1.0.3 2022/09/16 - fixed bug: database scheme column data_context should allow NULL values, default modal title include fallback to name if title is not set
  * @since 1.0.4 2022/09/16 - fixed bug: make language specific labels idependent from order in setup
  * @since 1.0.5 2023/03/21 - fixed bug: assign user language for tab label and modal title
+ * @since 1.0.6 2023/04/24 - fixed bug: Fatal Error: Nesting level too deep
  *
  * made for ProcessWire 3.x, by Ryan Cramer
  * https://processwire.com
@@ -28,7 +29,7 @@ class FieldtypePageContextData extends FieldtypePage {
 	public static function getModuleInfo() {
 		return array(
 			'title' => 'Page Reference Context Data',
-			'version' => 105,
+			'version' => 106,
 			'summary' => 'Field that stores one or more references to ProcessWire pages with additional data in field context, editable via page edit modal of the referenced page.',
 			'requires' => ['ProcessWire>=3.0.5, AdminPageFieldEditLinks >=3.1.4'] 
 			);
@@ -329,6 +330,7 @@ class FieldtypePageContextData extends FieldtypePage {
 		$contextDataField = strtok($field->contextDataFields, "\r\n");
 		$names = [];
 		$line = 0;
+		$userLanguage = wire()->user->language;
 		while ($contextDataField !== false) {
 			$line++;
 			$settings = null;
@@ -403,7 +405,7 @@ class FieldtypePageContextData extends FieldtypePage {
 	        			if ($langID) {
 	        				$language = wire('languages')->get($langID);
 	        				if (!$language->id) continue;
-	        				if (wire('user')->language != $language) continue;
+	        				if ($userLanguage !== $language) continue;
 	        				$inputfield->$settingName = trim($settingValue);
 	        				continue;
 	        			}
