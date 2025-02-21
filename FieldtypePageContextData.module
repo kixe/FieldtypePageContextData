@@ -9,7 +9,7 @@
  * @copyright © 2020 Christoph Thelen
  * @license Licensed under GNU/GPL v3
  * @link https://processwire.com/talk/topic/...
- * @version 1.0.6 BETA
+ * @version 1.0.7 BETA
  *
  * @since 1.0.0 2021/06/07 - init
  * @since 1.0.2 2021/09/28 - fixed bug: separator for options not compatible with windows
@@ -17,6 +17,7 @@
  * @since 1.0.4 2022/09/16 - fixed bug: make language specific labels idependent from order in setup
  * @since 1.0.5 2023/03/21 - fixed bug: assign user language for tab label and modal title
  * @since 1.0.6 2023/04/24 - fixed bug: Fatal Error: Nesting level too deep
+ * @since 1.0.7 2025/02/20 - fixed bug: Loss of context data when cloning
  *
  * made for ProcessWire 3.x, by Ryan Cramer
  * https://processwire.com
@@ -29,7 +30,7 @@ class FieldtypePageContextData extends FieldtypePage {
 	public static function getModuleInfo() {
 		return array(
 			'title' => 'Page Reference Context Data',
-			'version' => 106,
+			'version' => 107,
 			'summary' => 'Field that stores one or more references to ProcessWire pages with additional data in field context, editable via page edit modal of the referenced page.',
 			'requires' => ['ProcessWire>=3.0.5, AdminPageFieldEditLinks >=3.1.4'] 
 			);
@@ -51,7 +52,7 @@ class FieldtypePageContextData extends FieldtypePage {
 		$url = wire('config')->urls->get($this->className());
 		wire('config')->scripts->add($url . 'FieldtypePageContextData.js');
 
-		// if page is saved from modal
+		// if page (value to which the context values are assigned) is saved from modal
 		$this->addHookBefore('Pages::saveReady', function($e) {
 
 		    $page = $e->arguments[0];
@@ -242,8 +243,8 @@ class FieldtypePageContextData extends FieldtypePage {
 						} 
 						
 						// assign runtime values
-						$_page->set("_$k", $v); // not save – can be overwritten, if multiple fields of this type are in use and context field names are not unique
-						$_page->set($inputfield->name, $v); // save
+						$_page->set("_$k", $v); // not safe – can be overwritten, if multiple fields of this type are in use and context field names are not unique
+						$_page->set($inputfield->name, $v); // safe
 					}		
 				}
 			}
@@ -265,19 +266,26 @@ class FieldtypePageContextData extends FieldtypePage {
 		if($field->hasContext($page)) $field = $field->getContext($page);
 		
 		$sleepValue = array();
+
+		$forpageID = $page->id;
+
+		// cloning action? retrieve context values from previously assigned runtime value
+		if ($page->get('_cloning') && $page->get('_cloning') instanceof Page) {
+			$forpageID = $page->get('_cloning')->id;
+		}
 		
 		if($field->get('derefAsPage') > 0) {
 			// if the $value isn't specifically a Page, make it a blank array for storage
 			if(!$value instanceof Page || !$value->id) return $sleepValue; 
 			// if $value is a Page (not a NullPage) then place it's ID in an array for storage 
-			$sleepValue[] = ['data' => $value->id,'data_context' => $this->getContextDataString($value, $page->id, $field->name)];
+			$sleepValue[] = ['data' => $value->id,'data_context' => $this->getContextDataString($value, $forpageID, $field->name)];
 		} else {
 			// if $value isn't a PageArray then we'll store a blank array
 			if(!$value instanceof PageArray) return $sleepValue; 
 			// iterate through the array and place each Page ID
 			foreach($value as $pg) {
 				if(!$pg->id) continue;
-				$sleepValue[] = ['data' => $pg->id,'data_context' => $this->getContextDataString($pg, $page->id, $field->name)];
+				$sleepValue[] = ['data' => $pg->id,'data_context' => $this->getContextDataString($pg, $forpageID, $field->name)];
 			}
 		}		
 		return $sleepValue;
@@ -288,7 +296,6 @@ class FieldtypePageContextData extends FieldtypePage {
 	 * 
 	 * @param numeric $pageID – page where the field lives in
 	 * @param string $fieldname
-	 * @param string $return ('Page', 'Field', 'bool')
 	 * @return bool|array
 	 *
 	 */
