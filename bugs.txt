@@ -1,0 +1,11 @@
+		/**
+		 * replace page property placeholders e.g. for context data field value
+		 * syntax in column setup for context data field value 
+		 * _{datatable_page_source_id}_{datatable_pagefield_source_name}_<contextdatafieldname>" => <Label>
+		 */
+
+
+		// get last part of a context data field
+		// WARNING: unable to handle runtime properties with leading AND multiple underscores
+		if (strpos($fieldname, '_') === 0) $fieldname = array_pop(explode('_', $fieldname));
+		if ((int) $input->get("by_$fieldname")) {

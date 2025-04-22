@@ -9,7 +9,7 @@
  * @copyright © 2020 Christoph Thelen
  * @license Licensed under GNU/GPL v3
  * @link https://processwire.com/talk/topic/...
- * @version 1.0.7 BETA
+ * @version 1.0.8 BETA
  *
  * @since 1.0.0 2021/06/07 - init
  * @since 1.0.2 2021/09/28 - fixed bug: separator for options not compatible with windows
@@ -18,7 +18,8 @@
  * @since 1.0.5 2023/03/21 - fixed bug: assign user language for tab label and modal title
  * @since 1.0.6 2023/04/24 - fixed bug: Fatal Error: Nesting level too deep
  * @since 1.0.7 2025/02/20 - fixed bug: Loss of context data when cloning
- *
+ * @since 1.0.8 2025/04/22 - fixed bug: skipping of Inputfield settings 'labelFieldName' and 'labelFieldFormat'
+ * 
  * made for ProcessWire 3.x, by Ryan Cramer
  * https://processwire.com
  * 
@@ -30,7 +31,7 @@ class FieldtypePageContextData extends FieldtypePage {
 	public static function getModuleInfo() {
 		return array(
 			'title' => 'Page Reference Context Data',
-			'version' => 107,
+			'version' => 108,
 			'summary' => 'Field that stores one or more references to ProcessWire pages with additional data in field context, editable via page edit modal of the referenced page.',
 			'requires' => ['ProcessWire>=3.0.5, AdminPageFieldEditLinks >=3.1.4'] 
 			);
@@ -396,7 +397,7 @@ class FieldtypePageContextData extends FieldtypePage {
 	        		if ($inputfield instanceof InputfieldSelect && $settingName == 'options') {
 						$inputfield->addOptionsString(str_replace('\n', PHP_EOL, $settingValue));
 						continue;
-	        		} else if ($this->wire('languages') && wire('user')->language->isDefault() == false) {
+	        		} else if (!in_array($settingName, ['labelFieldName','labelFieldFormat']) && $this->wire('languages') && wire('user')->language->isDefault() == false) {
 	        			// assign label, description, notes in user language if set
 						$langID = 0;
 	        			if (strpos($settingName,'label') === 0 && strlen($settingName) > 5) {
